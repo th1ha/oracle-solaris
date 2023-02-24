@@ -1,0 +1,62 @@
+---
+- name: update all packages
+  hosts: all
+  gather_facts: false
+
+  vars:
+    reboot_confirmation: yes
+
+  tasks:
+    - name: collect the currnet active branch
+      shell: "pkg info entire | grep -i branch | awk {'print $2'}"
+      changed_when: false
+      register: current_branch_out
+
+    - name: collect info from ( pkg list -af entire )
+      shell: pkg list -Haf entire | head -n1 | cut -d "-" -f2 | cut -d " " -f1
+      changed_when: false
+      register: output_pkglist
+
+    - name: collect snapshot list
+      shell: beadm list | awk '{print $1}'
+      changed_when: false
+      register: output_beadm_list
+
+    - name: collect latest kernel version in snapshot list
+      shell: beadm list | grep $(pkg list -Haf entire | head -n1 | cut -d "-" -f2 | cut -d " " -f1) | cut -d " " -f1
+      changed_when: false
+      register: snapshot_list
+      when: output_pkglist.stdout in output_beadm_list.stdout_lines
+
+    - name: the latest kernel version is in the snapshot list
+      debug:
+        msg:
+         - "{{ inventory_hostname }} cannot update ( update kernel version is exist in snapshot list )"
+         - "latest kernel version ==> {{ output_pkglist.stdout }}"
+         - "snapshot name  ===> {{ snapshot_list.stdout }}"
+      when: output_pkglist.stdout in output_beadm_list.stdout_lines
+
+    - name: no updates available
+      debug:
+         msg: "{{ inventory_hostname }} ===> No updates available for this image"
+      when: current_branch_out.stdout == output_pkglist.stdout
+
+    - block:
+        - name: updating all packages (may take a while)
+          shell: "pkg update --be-name {{ output_pkglist.stdout }}  --accept"
+          register: output
+
+        - name: no need to reboot manual hosts list
+          debug:
+            msg: "{{ inventory_hostname }} will be reboot automatically"
+          when: 'output.rc == 0 and reboot_confirmation|bool == true|bool'
+
+        - name: need to reboot manual hosts list
+          debug:
+            msg: "{{ inventory_hostname }} will not  be reboot automatically"
+          when: 'output.rc == 0 and reboot_confirmation|bool == false|bool'
+
+        - name: rebooting the system
+          reboot:
+          when: output.rc == 0 and reboot_confirmation|bool == true|bool
+      when: (output_pkglist.stdout not in output_beadm_list.stdout_lines) and (current_branch_out.stdout != output_pkglist.stdout)
